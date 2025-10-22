@@ -1,0 +1,48 @@
+name: 🚀 バックアップ同期方式による公開デプロイ
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'デプロイ理由'
+        required: true
+        default: '通常公開'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    # IAMロールの引き受けを許可
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: 📦 コードのチェックアウト
+        uses: actions/checkout@v4
+
+      # --- AWS認証 ---
+      - name: ⚙️ AWS認証情報の設定 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # --- バックアップ処理 ---
+      - name: 💾 Step 1: 公開バケットの現行コンテンツをバックアップバケットへ同期
+        run: |
+          echo "公開バケット (${{ secrets.PUBLIC_BUCKET }}) をバックアップバケット (${{ secrets.BACKUP_BUCKET }}) へ同期します。"
+          # --delete: バックアップバケット側で公開バケットに存在しないファイルを削除し、完全に同期
+          aws s3 sync s3://${{ secrets.PUBLIC_BUCKET }} s3://${{ secrets.BACKUP_BUCKET }} --delete
+
+      # --- デプロイ処理 ---
+      - name: 📤 Step 2: プレビューから公開バケットへ新しいコンテンツを同期
+        run: |
+          echo "プレビューバケット (${{ secrets.PREVIEW_BUCKET }}) から公開バケットへ同期します。"
+          aws s3 sync s3://${{ secrets.PREVIEW_BUCKET }} s3://${{ secrets.PUBLIC_BUCKET }} --delete
+
+      # --- キャッシュ無効化 ---
+      - name: 💨 CloudFrontキャッシュの無効化
+        if: success()
+        run: |
+          aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
