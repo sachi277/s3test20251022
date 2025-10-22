@@ -41,8 +41,8 @@ jobs:
           echo "プレビューバケット (${{ secrets.PREVIEW_BUCKET }}) から公開バケットへ同期します。"
           aws s3 sync s3://${{ secrets.PREVIEW_BUCKET }} s3://${{ secrets.PUBLIC_BUCKET }} --delete
 
-      # --- キャッシュ無効化 ---
-      - name: 💨 CloudFrontキャッシュの無効化
-        if: success()
-        run: |
-          aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+      # # --- キャッシュ無効化 ---
+      # - name: 💨 CloudFrontキャッシュの無効化
+      #   if: success()
+      #   run: |
+      #     aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
