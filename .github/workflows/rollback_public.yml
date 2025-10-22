@@ -1,0 +1,34 @@
+name: ⏪ バックアップ同期方式による切り戻し
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: '切り戻し理由'
+        required: true
+        default: '緊急ロールバック'
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: ⚙️ AWS認証情報の設定 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: ↩️ バックアップから公開バケットへコンテンツを復元
+        run: |
+          echo "バックアップバケット (${{ secrets.BACKUP_BUCKET }}) の内容で公開バケットを上書きします。"
+          # バックアップバケットの内容をPUBLICバケットへ同期 (切り戻し)
+          aws s3 sync s3://${{ secrets.BACKUP_BUCKET }} s3://${{ secrets.PUBLIC_BUCKET }} --delete
+      
+      # - name: 💨 CloudFrontキャッシュの無効化
+      #   if: success()
+      #   run: |
+      #     aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
