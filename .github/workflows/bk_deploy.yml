@@ -1,0 +1,53 @@
+name:  (多世代バックアップ方式)　S3公開デプロイ
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'デプロイ理由'
+        required: true
+        default: '通常公開'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: コードのチェックアウト
+        uses: actions/checkout@v4
+
+      - name: バックアップ用タイムスタンプの生成
+        id: timestamp
+        # UTCでタイムスタンプを生成し、スラッシュを付けてフォルダ名として使用
+        run: echo "TIMESTAMP=$(date -u +'%Y-%m-%d-%H-%M-%S')" >> $GITHUB_ENV
+        
+      # --- AWS認証 ---
+      - name: AWS認証情報の設定 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # --- バックアップ処理 (日付フォルダを作成) ---
+      - name: 公開バケットの現行コンテンツを日付フォルダにコピー
+        run: |
+          BACKUP_PATH=s3://${{ secrets.BACKUP_BUCKET }}/${{ env.TIMESTAMP }}/
+          echo "バックアップ先フォルダ: $BACKUP_PATH"
+          # 公開バケットの内容を新しい日付フォルダへコピー
+          # --deleteはここでは不要 (フォルダ自体が新しいので)
+          aws s3 sync s3://${{ secrets.PUBLIC_BUCKET }} $BACKUP_PATH
+
+      # --- デプロイ処理 ---
+      - name: プレビューから公開バケットへ新しいコンテンツを同期
+        run: |
+          echo "プレビューから公開バケット (${{ secrets.PUBLIC_BUCKET }}) へ同期します。"
+          aws s3 sync s3://${{ secrets.PREVIEW_BUCKET }} s3://${{ secrets.PUBLIC_BUCKET }} --delete
+
+      # --- キャッシュ無効化 (CDNを利用する場合) ---
+      # - name: 💨 CloudFrontキャッシュの無効化
+      #   if: success()
+      #   run: |
+      #     aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
