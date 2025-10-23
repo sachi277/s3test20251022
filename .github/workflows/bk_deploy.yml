@@ -9,8 +9,16 @@ on:
         default: '通常公開'
 
 jobs:
-  deploy:
+  stage-approve:
     runs-on: ubuntu-latest
+    environment: stage
+    steps:
+      - name: Approval Job Complete
+        run: echo "検証環境へのデプロイが承認されました。後続のJobが実行されます。"
+
+  stage-deploy:
+    runs-on: ubuntu-latest
+    needs: stage-approve
     permissions:
       id-token: write
       contents: read
