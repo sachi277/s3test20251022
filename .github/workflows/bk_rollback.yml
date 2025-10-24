@@ -1,14 +1,12 @@
-name: (多世代バックアップ指定) S3切り戻し 
+name: (多世代バックアップ指定) S3切り戻し
 
 on:
-  # GitHub ActionsのUIから手動で実行できるように設定
   workflow_dispatch:
     inputs:
-      # ロールバックしたいフォルダ名を手動で指定できるようにする
       target_folder:
         description: 'ロールバックする日付フォルダ名 (例: 2025-10-22-10-30-00)。未入力の場合は最新版から復元します。'
         required: false
-        default: 'latest' # 'latest' が指定された場合は、最新のフォルダを自動で探す
+        default: 'latest'
 
 jobs:
   stage-approve:
@@ -20,33 +18,36 @@ jobs:
 
   stage-rollback:
     runs-on: ubuntu-latest
-    needs : stage-approve
+    needs: stage-approve
     permissions:
       id-token: write
       contents: read
 
     steps:
       # --- AWS認証 ---
-      - name: ⚙️ AWS認証情報の設定 (OIDC)
+      - name: AWS認証情報の設定 (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: 🔍 ロールバック対象フォルダの特定
+      # --- ロールバック対象フォルダの特定 ---
+      - name: ロールバック対象フォルダの特定
         id: determine_folder
-        # シェルスクリプトで、入力された値 ('latest' or フォルダ名) に応じて ROLLBACK_FOLDER 環境変数を設定
         run: |
           TARGET="${{ github.event.inputs.target_folder }}"
           BACKUP_BUCKET=${{ secrets.BACKUP_BUCKET }}
-          
+
           if [ "$TARGET" == "latest" ]; then
             echo "最新のバックアップフォルダを検索中..."
-            # aws s3api list-objectsでフォルダ (CommonPrefixes) を取得し、最後の要素 (最新) を抽出
-            LATEST_FOLDER=$(aws s3api list-objects --bucket $BACKUP_BUCKET --delimiter '/' \
-                           --query 'CommonPrefixes[-1].Prefix' --output text | tr -d '/')
+            # 時系列でソートして最新フォルダを取得
+            LATEST_FOLDER=$(aws s3api list-objects-v2 \
+                             --bucket $BACKUP_BUCKET \
+                             --delimiter '/' \
+                             --query 'reverse(sort_by(CommonPrefixes, &Prefix))[0].Prefix' \
+                             --output text | tr -d '/')
 
-            if [ "$LATEST_FOLDER" == "None" ] || [ -z "$LATEST_FOLDER" ]; then
+            if [ -z "$LATEST_FOLDER" ] || [ "$LATEST_FOLDER" == "None" ]; then
               echo "::error::バックアップフォルダが見つかりませんでした。デプロイが一度も実行されていない可能性があります。"
               exit 1
             fi
@@ -55,23 +56,33 @@ jobs:
             echo "ROLLBACK_FOLDER=$LATEST_FOLDER" >> $GITHUB_ENV
           else
             echo "指定されたフォルダ: $TARGET を使用します。"
-            # S3パスとして使用するため、念のため末尾のスラッシュを削除
             SANITIZED_TARGET=$(echo "$TARGET" | sed 's/\/$//')
             echo "ROLLBACK_FOLDER=$SANITIZED_TARGET" >> $GITHUB_ENV
           fi
 
-      - name: ↩️ バックアップフォルダから公開バケットへ復元
-        # env.ROLLBACK_FOLDERを使用して、指定されたバージョンを復元
+      # --- バックアップフォルダ存在確認 ---
+      - name: バックアップフォルダ内容確認
+        run: |
+          COUNT=$(aws s3 ls s3://${{ secrets.BACKUP_BUCKET }}/${{ env.ROLLBACK_FOLDER }}/ --recursive | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::指定されたバックアップフォルダ (${env.ROLLBACK_FOLDER}) が空です。中断します。"
+            exit 1
+          fi
+
+      # --- ロールバック実行 ---
+      - name: バックアップフォルダから公開バケットへ復元
         run: |
           BACKUP_PATH=s3://${{ secrets.BACKUP_BUCKET }}/${{ env.ROLLBACK_FOLDER }}/
           echo "$BACKUP_PATH の内容で公開バケットを上書きします。"
-          
-          # syncコマンドで、指定されたバックアップフォルダの内容をPUBLICバケットに復元
-          # --delete: フォルダ内にないファイルを公開バケットから削除し、完全に状態を一致させる
-          aws s3 sync $BACKUP_PATH s3://${{ secrets.PUBLIC_BUCKET }} --delete
-      
-      # --- キャッシュ無効化 (CDNを利用する場合にコメントを外してください) ---
-      # - name: 💨 CloudFrontキャッシュの無効化
-      #   if: success()
+
+          # 完全復元: --exact-timestamps でタイムスタンプ精度も保持
+          # --delete で不要ファイルを削除し、一致した状態に戻す
+          aws s3 sync $BACKUP_PATH s3://${{ secrets.PUBLIC_BUCKET }} --exact-timestamps --delete
+
+      # --- CloudFrontキャッシュ無効化 (CDN利用時にコメント解除) ---
+      # - name: CloudFrontキャッシュの無効化
+      #   if: success() && secrets.CLOUDFRONT_DISTRIBUTION_ID != ''
       #   run: |
-      #     aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+      #     aws cloudfront create-invalidation \
+      #       --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+      #       --paths "/*"
