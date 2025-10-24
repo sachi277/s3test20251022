@@ -46,13 +46,13 @@ jobs:
           echo "バックアップ先フォルダ: $BACKUP_PATH"
           # 公開バケットの内容を新しい日付フォルダへコピー
           # --deleteはここでは不要 (フォルダ自体が新しいので)
-          aws s3 sync s3://${{ secrets.PUBLIC_BUCKET }} $BACKUP_PATH
+          aws s3 sync s3://${{ secrets.PUBLIC_BUCKET }} $BACKUP_PATH --exact-timestamps
 
       # --- デプロイ処理 ---
       - name: プレビューから公開バケットへ新しいコンテンツを同期
         run: |
           echo "プレビューから公開バケット (${{ secrets.PUBLIC_BUCKET }}) へ同期します。"
-          aws s3 sync s3://${{ secrets.PREVIEW_BUCKET }} s3://${{ secrets.PUBLIC_BUCKET }} --delete
+          aws s3 sync s3://${{ secrets.PREVIEW_BUCKET }} s3://${{ secrets.PUBLIC_BUCKET }} --exact-timestamps --delete
 
       # --- キャッシュ無効化 (CDNを利用する場合) ---
       # - name: 💨 CloudFrontキャッシュの無効化
